@@ -1,0 +1,33 @@
+.app-tags--table-title-cell p{
+    max-width: 400px;
+    transition: all .5s;
+}
+.app-tags--table-title-cell p:hover{
+    text-decoration: underline;
+}
+.app-tags--pagination-bottom .Polaris-ButtonGroup.Polaris-ButtonGroup--variantSegmented{
+    justify-content: center;
+}
+
+.app-tags--index-table-image-cell{
+    width: 50px;
+}
+
+.app-tags--table-status-cell{
+    width: 70px;
+}
+
+.Polaris-IndexTable__TableCell{
+    white-space:wrap;
+}
+.Polaris-IndexTable__TableCell span{
+    margin: 1px;
+}
+
+#product-detail-popup--image-box img{
+    object-fit: cover;
+}
+#product-detail-popup--image-box{
+    width: 200px;
+    height: 300px;
+}
