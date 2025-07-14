@@ -3,7 +3,7 @@
 client_id = "bbad44303f1c5227a422c9e5fafdf4f7"
 name = "basic-task"
 handle = "basic-task"
-application_url = "https://salary-japanese-morocco-ng.trycloudflare.com"
+application_url = "https://tension-horrible-counseling-wrestling.trycloudflare.com"
 embedded = true
 
 [build]
@@ -26,7 +26,7 @@ api_version = "2025-04"
 scopes = "write_products"
 
 [auth]
-redirect_urls = ["https://salary-japanese-morocco-ng.trycloudflare.com/auth/callback", "https://salary-japanese-morocco-ng.trycloudflare.com/auth/shopify/callback", "https://salary-japanese-morocco-ng.trycloudflare.com/api/auth/callback"]
+redirect_urls = ["https://tension-horrible-counseling-wrestling.trycloudflare.com/auth/callback", "https://tension-horrible-counseling-wrestling.trycloudflare.com/auth/shopify/callback", "https://tension-horrible-counseling-wrestling.trycloudflare.com/api/auth/callback"]
 
 [pos]
 embedded = false

@@ -1,82 +1,88 @@
 import { Form, useNavigation } from "@remix-run/react";
 import {
   Button,
-  BlockStack,
-  InlineStack,
+  Card,
   TextField,
-  TextContainer,
   Text,
   ButtonGroup,
-  Badge,
   Box,
   Tag,
+  InlineStack,
+  BlockStack,
 } from "@shopify/polaris";
-import { XSmallIcon } from "@shopify/polaris-icons";
 import { useCallback, useState, useEffect, useRef } from "react";
 
 type Product = { id: string; title: string; tags: string[] };
 
-export default function GenarateTagForAll({
+export default function GenerateTagForAll({
   selectedResources,
   avalableProducts,
   onTagsUpdated,
+  useTags: { tags, setTags },
 }: {
   selectedResources: string[];
   avalableProducts: Product[];
   onTagsUpdated: (updatedProducts: Product[]) => void;
+  useTags: any;
 }) {
   const navigation = useNavigation();
   const [manualTags, setManualTags] = useState<string[]>([]);
-  const [Tags, setTags] = useState<any>([]);
   const [generatedTagsMap, setGeneratedTagsMap] = useState<
     Record<string, string[]>
   >({});
   const [newTag, setNewTag] = useState("");
   const [isDirty, setIsDirty] = useState(false);
-
+  const [tagInputError, setTagInputError] = useState("");
   // Track selected IDs in a ref to detect changes
   const prevSelectedRef = useRef<string[]>([]);
 
-  // When selectedResources changes, remove generated tags for unselected products
+  // Update isDirty whenever manualTags or generatedTagsMap changes
   useEffect(() => {
-    // Remove generated tags for unselected
+    const hasManualTags = manualTags.length > 0;
+    const hasGeneratedTags = Object.keys(generatedTagsMap).length > 0;
+    setIsDirty(hasManualTags || hasGeneratedTags);
+  }, [manualTags, generatedTagsMap]);
+
+  useEffect(() => {
     const updatedMap: Record<string, string[]> = {};
     selectedResources.forEach((id) => {
       if (generatedTagsMap[id]) updatedMap[id] = generatedTagsMap[id];
     });
     setGeneratedTagsMap(updatedMap);
     prevSelectedRef.current = selectedResources;
-    setIsDirty(false); // Reset dirty
   }, [selectedResources]);
 
-  // Handle adding manual tag
   const handleAddTag = useCallback(() => {
-    if (newTag.trim() && !manualTags.includes(newTag.trim())) {
-      setManualTags((prev) => [...prev, newTag.trim()]);
-      setNewTag("");
-      setIsDirty(true);
+    if (!newTag.trim()) {
+      setTagInputError("Tag cannot be empty");
+      return;
     }
+
+    if (manualTags.includes(newTag.trim())) {
+      setTagInputError("Tag already exists");
+      return;
+    }
+
+    setManualTags((prev) => [...prev, newTag.trim()]);
+    setNewTag("");
+    setTagInputError("");
   }, [newTag, manualTags]);
 
-  // Handle remove manual tag
   const handleRemoveTag = useCallback((tagToRemove: string) => {
     setManualTags((prev) => prev.filter((tag) => tag !== tagToRemove));
-    setIsDirty(true);
   }, []);
 
-  // Handle "Generate Tags" per selected product
   const handleGenerateTags = useCallback(() => {
     const newGenerated: Record<string, string[]> = {};
     avalableProducts.forEach((product) => {
       if (selectedResources.includes(product.id)) {
         const cleanedTitle = product.title
-          .replace(/[′'"“”‘’`]/g, "")
+          .replace(/[′'""“”‘’`]/g, "")
           .toLowerCase();
         const baseTags = cleanedTitle
           .split(/[\s,\-×]+/)
           .filter((word: string) => word.length > 2);
 
-        // Optionally: parse size/dimension from title
         const dimensionRegex = /(\d+(\.\d+)?)[^\d]*(\d+(\.\d+)?)/;
         const match = cleanedTitle.match(dimensionRegex);
         let sizeTags: string[] = [];
@@ -91,45 +97,47 @@ export default function GenarateTagForAll({
           ];
         }
 
-        // Only use unique tags for this product
         newGenerated[product.id] = Array.from(
           new Set([...baseTags, ...sizeTags]),
         );
       }
     });
     setGeneratedTagsMap(newGenerated);
-    setIsDirty(true);
   }, [avalableProducts, selectedResources]);
 
-  // Clear all manual and generated tags
-  const handleClearTags = () => {
+  const handleClearTags = useCallback(() => {
     setManualTags([]);
     setGeneratedTagsMap({});
-    setIsDirty(false);
-  };
+  }, []);
 
-  // Apply manual and generated tags to selected products
-  // Apply manual and generated tags to selected products
-  const applyTagsToProducts = async (e: React.FormEvent) => {
-    // Calculate the updated products first
-    const updatedProducts = avalableProducts
-      .filter((p) => selectedResources.includes(p.id))
-      .map((product) => {
-        const productGeneratedTags = generatedTagsMap[product.id] ?? [];
-        // Only add new tags (manual + generated) that are not already present
-        const newTags = [
-          ...product.tags,
-          ...manualTags.filter((tag) => !product.tags.includes(tag)),
-          ...productGeneratedTags.filter((tag) => !product.tags.includes(tag)),
-        ];
-        return { ...product, tags: Array.from(new Set(newTags)) };
-      });
+  const applyTagsToProducts = useCallback(
+    (e: React.FormEvent) => {
+      const updatedProducts = avalableProducts
+        .filter((p) => selectedResources.includes(p.id))
+        .map((product) => {
+          const productGeneratedTags = generatedTagsMap[product.id] ?? [];
+          const newTags = [
+            ...product.tags,
+            ...manualTags.filter((tag) => !product.tags.includes(tag)),
+            ...productGeneratedTags.filter(
+              (tag) => !product.tags.includes(tag),
+            ),
+          ];
+          return { ...product, tags: Array.from(new Set(newTags)) };
+        });
 
-    // Update the state and call the callback
-    setTags(updatedProducts);
-    setIsDirty(false);
-    onTagsUpdated(updatedProducts);
-  };
+      setTags(updatedProducts);
+      setIsDirty(false);
+      onTagsUpdated(updatedProducts);
+    },
+    [
+      avalableProducts,
+      selectedResources,
+      generatedTagsMap,
+      manualTags,
+      onTagsUpdated,
+    ],
+  );
 
   useEffect(() => {
     const updatedProducts = avalableProducts
@@ -145,9 +153,15 @@ export default function GenarateTagForAll({
       });
 
     setTags(updatedProducts);
-  }, [manualTags, generatedTagsMap, selectedResources]);
+  }, [manualTags, generatedTagsMap, selectedResources, avalableProducts]);
 
-  if (!selectedResources.length) return <p>Select products to manage tags</p>;
+  const handleTagInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleAddTag();
+    }
+  };
+
   return (
     <Form method="post" onSubmit={applyTagsToProducts}>
       <input
@@ -155,115 +169,99 @@ export default function GenarateTagForAll({
         name="selectedProductIds"
         value={JSON.stringify(selectedResources)}
       />
-      <input type="hidden" name="tags" value={JSON.stringify(Tags)} />
-      <BlockStack gap="200">
-        <InlineStack gap="200" blockAlign="end">
-          <div style={{ marginBottom: 10, width: "100%" }}>
-            <TextField
-              label={`Add Tags for ${selectedResources.length} Selected Products`}
-              value={newTag}
-              placeholder="Enter new tag"
-              onChange={setNewTag}
-              autoComplete="off"
-              connectedRight={
-                <div style={{ display: "flex", gap: "5px" }}>
-                  <Button onClick={handleAddTag} disabled={!newTag.trim()}>
-                    Add
-                  </Button>
-                  <ButtonGroup>
-                    <Button
-                      onClick={handleGenerateTags}
-                      disabled={!selectedResources.length}
-                    >
-                      Generate Tags
-                    </Button>
-                    <Button
-                      onClick={handleClearTags}
-                      variant="plain"
-                      tone="critical"
-                    >
-                      Clear
-                    </Button>
-                  </ButtonGroup>
-                </div>
-              }
-            />
-            <TextContainer spacing="tight">
-              <Text as="p" tone="subdued" variant="bodySm">
-                Press Enter to add tags
-              </Text>
-            </TextContainer>
-          </div>
-        </InlineStack>
-        {/* New Tags to Add */}
-        {manualTags.length > 0 && (
-          <Box padding="200">
-            <Text variant="bodyMd" as="h3">
-              Tags to be Added:
+      <input type="hidden" name="tags" value={JSON.stringify(tags)} />
+
+      <BlockStack gap="400">
+        <Card>
+          <BlockStack gap="400">
+            <div onKeyDown={handleTagInputKeyDown}>
+              <TextField
+                label={`Add tags to selected products`}
+                value={newTag}
+                placeholder="Enter new tag"
+                onChange={setNewTag}
+                autoComplete="off"
+                error={tagInputError}
+              />
+            </div>
+            <Text as="p" tone="subdued" variant="bodySm">
+              Press enter to add tags
             </Text>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "8px",
-                marginTop: "8px",
-              }}
-            >
-              {manualTags.map((tag) => (
-                <Tag key={tag}>
-                  <InlineStack gap="100" blockAlign="center">
-                    <Text as="span" variant="bodyMd">
-                      {tag}
+          </BlockStack>
+        </Card>
+
+        {manualTags.length > 0 && (
+          <Card>
+            <BlockStack gap="200">
+              {manualTags.length > 0 && (
+                <Box paddingBlockEnd="200">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <Text variant="bodyMd" as="h3" fontWeight="semibold">
+                      Added Tags
                     </Text>
                     <Button
+                      onClick={() => {
+                        setManualTags([]);
+                      }}
+                      disabled={
+                        !manualTags.length &&
+                        !Object.keys(generatedTagsMap).length
+                      }
                       variant="plain"
-                      icon={XSmallIcon}
-                      size="slim"
-                      onClick={() => handleRemoveTag(tag)}
-                      accessibilityLabel={`Remove ${tag}`}
-                    />
-                  </InlineStack>
-                </Tag>
-              ))}
-            </div>
-          </Box>
+                    >
+                      Clear Tags
+                    </Button>
+                  </div>
+
+                  <Box paddingBlockStart="200">
+                    <InlineStack gap="100" wrap>
+                      {manualTags.map((tag) => (
+                        <Tag key={tag} onRemove={() => handleRemoveTag(tag)}>
+                          {tag}
+                        </Tag>
+                      ))}
+                    </InlineStack>
+                  </Box>
+                </Box>
+              )}
+            </BlockStack>
+          </Card>
         )}
-        {/* Generated tags per product (optional visual) */}
-        {Object.keys(generatedTagsMap).length > 0 && (
-          <Box padding="200">
-            <Text variant="bodyMd" as="h3">
-              Generated Tags (per product):
-            </Text>
-            {selectedResources.map((pid) => (
-              <div key={pid} style={{ marginBottom: 8 }}>
-                <Text as="span" fontWeight="bold">
-                  {avalableProducts.find((p) => p.id === pid)?.title || pid}:
-                </Text>
-                <span style={{ marginLeft: 8 }}>
-                  {(generatedTagsMap[pid] || []).map((tag) => (
-                    <Badge key={tag} tone="info">
-                      {tag}
-                    </Badge>
-                  ))}
-                </span>
-              </div>
-            ))}
-          </Box>
-        )}
+
+        <InlineStack align="space-between" gap="200">
+          <Button
+            onClick={handleGenerateTags}
+            disabled={!selectedResources.length}
+            variant="primary"
+          >
+            Auto Generate
+          </Button>
+          <ButtonGroup>
+            <Button
+              onClick={handleClearTags}
+              tone="critical"
+              disabled={!isDirty}
+            >
+              Remove Changes
+            </Button>
+            <Button
+              submit
+              variant="primary"
+
+              loading={navigation.state === "submitting"}
+              disabled={!isDirty || !selectedResources.length}
+            >
+              Save
+            </Button>
+          </ButtonGroup>
+        </InlineStack>
       </BlockStack>
-      <InlineStack gap="200" blockAlign="center" align="end">
-        <Button
-          submit
-          variant="primary"
-          loading={navigation.state === "submitting"}
-          disabled={!isDirty}
-        >
-          Apply to {selectedResources.length.toString()} Products
-        </Button>
-        <Button onClick={handleClearTags} variant="plain" disabled={!isDirty}>
-          Cancel
-        </Button>
-      </InlineStack>
     </Form>
   );
 }

@@ -122,9 +122,22 @@ export function ProductDetailPopup({
         </>
       }
       size="large"
+      primaryAction={{
+        content: "Save",
+        onAction: () => {
+          document.getElementById("product-tags-form")?.requestSubmit();
+        },
+        loading: navigation.state === "submitting",
+      }}
+      secondaryActions={[
+        {
+          content: "Cancel",
+          onAction: onClose,
+        },
+      ]}
     >
       <Modal.Section>
-        <Form method="post">
+        <Form method="post" id="product-tags-form">
           <input type="hidden" name="productId" value={product.id} />
           <input type="hidden" name="tags" value={JSON.stringify(allTags)} />
           <BlockStack gap="400">
@@ -289,19 +302,7 @@ export function ProductDetailPopup({
               </ButtonGroup>
             </BlockStack>
 
-            <InlineStack gap="200">
-              <Button
-                submit
-                variant="primary"
-                loading={navigation.state === "submitting"}
-                disabled={!isDirty}
-              >
-                Save Tags
-              </Button>
-              <Button submit variant="plain" disabled={!isDirty}>
-                Cancel
-              </Button>
-            </InlineStack>
+            <InlineStack gap="200"></InlineStack>
           </BlockStack>
         </Form>
       </Modal.Section>

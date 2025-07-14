@@ -6,81 +6,103 @@ import {
   IndexFilters,
   useSetIndexFiltersMode,
   useIndexResourceState,
-  Text,
   ChoiceList,
   Page,
   Card,
-  Pagination,
 } from "@shopify/polaris";
 import type { IndexFiltersProps, TabProps } from "@shopify/polaris";
 import { authenticate } from "app/shopify.server";
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   useActionData,
   useLoaderData,
   useSearchParams,
+  useNavigation,
 } from "@remix-run/react";
 
 import RowMarkup from "app/components/RowMarkup";
-import {
-  fetchProductsFromApi,
-  fetchProductsSearchFromApi,
-} from "app/utils/productApi";
+import { fetchProductsFromApi } from "app/utils/productApi";
 import { ProductDetailPopup } from "app/components/ProductDetailPopup";
 import GenarateTagForAll from "app/components/GenerateTagForAll";
+type Product = {
+  id: string;
+  title: string;
+  tags: string[];
+  status: string;
+  featuredImage?: { url?: string; altText?: string };
+};
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const { admin } = await authenticate.admin(request);
     const url = new URL(request.url);
     const searchQuery = url.searchParams.get("search") || "";
+    const status = url.searchParams.get("status") || "";
+    const taggedWith = url.searchParams.get("taggedWith") || "";
     const after = url.searchParams.get("after");
     const before = url.searchParams.get("before");
+    const sortKey = url.searchParams.get("sortKey") || "TITLE";
+    const reverse = url.searchParams.get("reverse") === "true";
+
+    let queryParts = [];
+    if (searchQuery) {
+      queryParts.push(
+        `(title:*${searchQuery}* OR tag:*${searchQuery}* OR product_type:*${searchQuery}* OR vendor:*${searchQuery}*)`,
+      );
+    }
+
+    if (status) queryParts.push(`status:${status}`);
+    if (taggedWith) queryParts.push(`tag:${taggedWith}`);
+
+    const query = queryParts.length > 0 ? queryParts.join(" AND ") : undefined;
     const direction = after ? "next" : before ? "prev" : "first";
-    const query = searchQuery ? `title:*${searchQuery}*` : undefined;
 
     const response = await admin.graphql(
       `#graphql
-     query FetchProducts($query: String, $first: Int, $last: Int, $after: String, $before: String) {
-       products(query: $query, first: $first, last: $last, after: $after, before: $before) {
-         edges {
-           cursor
-           node {
-             id
-             title
-             tags
-             status
-             featuredImage {
-               url
-               altText
-             }
-             variants(first: 1) {
-               edges {
-                 node {
-                   inventoryQuantity
-                 }
-               }
-             }
-           }
-         }
-         pageInfo {
-           hasNextPage
-           hasPreviousPage
-           startCursor
-           endCursor
-         }
-       }
-     }
-    `,
+      query FetchProducts($query: String, $first: Int, $last: Int, $after: String, $before: String, $sortKey: ProductSortKeys, $reverse: Boolean) {
+        products(query: $query, first: $first, last: $last, after: $after, before: $before, sortKey: $sortKey, reverse: $reverse) {
+          edges {
+            cursor
+            node {
+              id
+              title
+              tags
+              status
+              featuredImage {
+                url
+                altText
+              }
+              variants(first: 1) {
+                edges {
+                  node {
+                    inventoryQuantity
+                  }
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+        }
+      }`,
       {
         variables: {
           query,
-          first: direction === "first" || direction === "next" ? 25 : undefined,
-          last: direction === "prev" ? 25 : undefined,
+          first:
+            direction === "first" || direction === "next" ? 250 : undefined,
+          last: direction === "prev" ? 250 : undefined,
           after,
           before,
+          sortKey,
+          reverse,
         },
       },
     );
+
     const { data } = await response.json();
     const productEdges = data.products.edges;
     const products = productEdges.map((edge: any) => {
@@ -90,31 +112,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         cursor: edge.cursor,
       };
     });
-    const pageInfo = data.products.pageInfo;
-    const countResponse = await admin.graphql(
-      `#graphql
-      query CountProducts($query: String, $first: Int) {
-        products(query: $query, first: $first) {
-          edges {
-            node {
-              id
-            }
-          }
-        }
-      }`,
-      {
-        variables: {
-          query,
-          first: 250,
-        },
-      },
-    );
-    const countData = await countResponse.json();
-    const totalCount = countData.data.products.edges.length;
-    return json({ pr: products, searchQuery, pI: pageInfo, totalCount });
+
+    return json({
+      pr: products,
+      searchQuery,
+      pI: data.products.pageInfo,
+      statusFilter: status,
+      taggedWithFilter: taggedWith,
+      sortKey,
+      reverse,
+    });
   } catch (error: any) {
     console.error("GraphQL Error", error.message);
-    throw new Response("Shopify GraphQL Error" + error.message, {
+    throw new Response("Shopify GraphQL Error Loader : " + error.message, {
       status: 500,
     });
   }
@@ -124,22 +134,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
-
-  // Handle cancel action
   if (intent === "cancel") {
     return json({ cancelled: true });
   }
-
   try {
-    // Check if this is a bulk update (has selectedProductIds)
     const selectedProductIds = formData.get("selectedProductIds");
-    
     const isBulkUpdate = selectedProductIds !== null;
-    console.log(isBulkUpdate);
     if (isBulkUpdate) {
       const tags = JSON.parse(formData.get("tags") as string);
-      console.log(tags);
-      const updatePromises = tags.map((productTags:any) =>
+      const updatePromises = tags.map((productTags: any) =>
         admin.graphql(
           `#graphql
           mutation productUpdate($input: ProductInput!) {
@@ -168,12 +171,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       const results = await Promise.all(updatePromises);
       const jsonResults = await Promise.all(results.map((r) => r.json()));
-
-      // Check for errors
       const errors = jsonResults.flatMap(
         (result) => result.data?.productUpdate?.userErrors || [],
       );
-
       if (errors.length > 0) {
         return json({ errors });
       }
@@ -181,14 +181,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const updatedProducts = jsonResults.map(
         (result) => result.data?.productUpdate?.product,
       );
-
       return json({
         success: true,
         updatedCount: updatedProducts.length,
         isBulkUpdate: true,
       });
     } else {
-      // Handle single product update (from ProductDetailPopup)
       const productId = formData.get("productId");
       const tags = formData.get("tags");
 
@@ -216,13 +214,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
         },
       );
-
       const { data } = await response.json();
-
       if (data.productUpdate.userErrors.length > 0) {
         return json({ errors: data.productUpdate.userErrors });
       }
-
       return json({
         success: true,
         product: data.productUpdate.product,
@@ -235,21 +230,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ProductsIndex() {
-  const { pr, searchQuery, pI, totalCount } = useLoaderData<typeof loader>();
+  const {
+    pr,
+    searchQuery,
+    pI,
+    statusFilter,
+    taggedWithFilter,
+    sortKey,
+    reverse,
+  } = useLoaderData<typeof loader>();
   const actionReaponce = useActionData<any>();
   const [pageInfo, setPageInfo] = useState(pI);
   const [products, setProducts] = useState(pr);
   const [searchProduct, setSearchProduct] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const navigation = useNavigation();
+  const [isLoading, setIsLoading] = useState(navigation.state === "loading");
+  const isNavigation = navigation.state === "loading";
+  const [pageNumber, setPageNumber] = useState<number>(1);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Initialize filter state from URL params
+  const [productStatus, setProductStatus] = useState<string[] | undefined>(
+    statusFilter ? statusFilter.split(",") : undefined,
+  );
+  const [taggedWith, setTaggedWith] = useState(taggedWithFilter || "");
+  const [queryValue, setQueryValue] = useState(searchQuery || "");
+  const [tags, setTags] = useState<Product[]>([]);
   const sleep = (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, ms));
-
-  const [itemStrings, setItemStrings] = useState([
-    "All",
-    "Active",
-    "Draft",
-    "Archived",
-  ]);
+  const [itemStrings, setItemStrings] = useState(["All", "Active", "Draft"]);
 
   useEffect(() => {
     if (actionReaponce?.success && actionReaponce.product) {
@@ -265,6 +273,11 @@ export default function ProductsIndex() {
     console.log(actionReaponce);
   }, [actionReaponce]);
 
+  useEffect(() => {
+    setPageInfo(pI);
+    setProducts(pr);
+  }, [pr]);
+
   const deleteView = (index: number) => {
     const newItemStrings = [...itemStrings];
     newItemStrings.splice(index, 1);
@@ -278,10 +291,23 @@ export default function ProductsIndex() {
     await sleep(1);
     return true;
   };
+
   const tabs: TabProps[] = itemStrings.map((item, index) => ({
     content: item,
     index,
-    onAction: () => {},
+    onAction: () => {
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete("after");
+      newParams.delete("before");
+      newParams.delete("status");
+
+      if (item !== "All") {
+        newParams.set("status", item.toUpperCase());
+      }
+
+      setSearchParams(newParams);
+      setSelected(index);
+    },
     id: `${item}-${index}`,
     isLocked: index === 0,
     actions:
@@ -324,6 +350,7 @@ export default function ProductsIndex() {
             },
           ],
   }));
+
   const [selected, setSelected] = useState(0);
   const onCreateNewView = async (value: string) => {
     await sleep(500);
@@ -331,17 +358,38 @@ export default function ProductsIndex() {
     setSelected(itemStrings.length);
     return true;
   };
-
   const sortOptions: IndexFiltersProps["sortOptions"] = [
-    { label: "Product", value: "title asc", directionLabel: "A-Z" },
-    { label: "Product", value: "title desc", directionLabel: "Z-A" },
-    { label: "tags", value: "tags asc", directionLabel: "asc" },
-    { label: "tags", value: "tags desc", directionLabel: "desc" },
+    { label: "Product (A-Z)", value: "TITLE asc", directionLabel: "A-Z" },
+    { label: "Product (Z-A)", value: "TITLE desc", directionLabel: "Z-A" },
+    {
+      label: "Recently updated",
+      value: "UPDATED_AT desc",
+      directionLabel: "Newest first",
+    },
+    {
+      label: "Oldest updated",
+      value: "UPDATED_AT asc",
+      directionLabel: "Oldest first",
+    },
+    {
+      label: "Recently created",
+      value: "CREATED_AT desc",
+      directionLabel: "Newest first",
+    },
+    {
+      label: "Oldest created",
+      value: "CREATED_AT asc",
+      directionLabel: "Oldest first",
+    },
   ];
+  const [sortSelected, setSortSelected] = useState<string[]>([
+    `${sortKey}_${reverse ? "desc" : "asc"}`,
+  ]);
 
-  const [sortSelected, setSortSelected] = useState(["title asc"]);
   const { mode, setMode } = useSetIndexFiltersMode();
+
   const onHandleCancel = () => {};
+
   const onHandleSave = async () => {
     await sleep(1);
     return true;
@@ -361,59 +409,83 @@ export default function ProductsIndex() {
           disabled: false,
           loading: false,
         };
-
-  const [productStatus, setProductStatus] = useState<string[] | undefined>(
-    undefined,
-  );
   const [inventoryRange, setInventoryRange] = useState<
     [number, number] | undefined
   >(undefined);
-  const [taggedWith, setTaggedWith] = useState("");
-  const [queryValue, setQueryValue] = useState("");
+
+  // Handle sort change
+  const handleSortChange = useCallback(
+    (value: string[]) => {
+      const [sortKey, direction] = value[0].split(" ");
+      const reverse = direction === "desc";
+
+      const newParams = new URLSearchParams(searchParams);
+      newParams.set("sortKey", sortKey);
+      newParams.set("reverse", reverse.toString());
+      newParams.delete("after");
+      newParams.delete("before");
+
+      setSearchParams(newParams);
+      setSortSelected(value);
+    },
+    [searchParams, setSearchParams],
+  );
 
   const handleProductStatusChange = useCallback(
-    (value: string[]) => setProductStatus(value),
-    [],
+    (value: string[]) => {
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete("after");
+      newParams.delete("before");
+      if (value.length > 0) {
+        newParams.set("status", value.join(","));
+      } else {
+        newParams.delete("status");
+      }
+      setSearchParams(newParams);
+      setProductStatus(value);
+    },
+    [searchParams, setSearchParams],
   );
+
   const handleTaggedWithChange = useCallback(
-    (value: string) => setTaggedWith(value),
-    [],
+    (value: string) => {
+      const newParams = new URLSearchParams(searchParams);
+      newParams.delete("after");
+      newParams.delete("before");
+      if (value) {
+        newParams.set("taggedWith", value);
+      } else {
+        newParams.delete("taggedWith");
+      }
+      setSearchParams(newParams);
+      setTaggedWith(value);
+    },
+    [searchParams, setSearchParams],
   );
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const queryRef = useRef("");
 
-  const handleFiltersQueryChange = useCallback((value: string) => {
-    setQueryValue(value);
-    queryRef.current = value;
-
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-    timerRef.current = setTimeout(() => {
-      const newParams = new URLSearchParams(window.location.search);
-      newParams.delete("after");
-      newParams.delete("before");
-      if (value.trim()) {
-        newParams.set("search", value.trim());
-      } else {
-        newParams.delete("search");
+  const handleFiltersQueryChange = useCallback(
+    (value: string) => {
+      setQueryValue(value);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
       }
-      setIsLoading(true);
-      fetchProductsFromApi(newParams.toString())
-        .then((apiData) => {
-          console.log(apiData);
-          setSearchProduct(apiData.products);
-        })
-        .catch((error) => {
-          console.error("API search error:", error);
-        })
-        .finally(() => {
-          setIsLoading(false);
-        });
-    }, 300);
-  }, []);
-
+      timerRef.current = setTimeout(() => {
+        const newParams = new URLSearchParams(searchParams);
+        newParams.delete("after");
+        newParams.delete("before");
+        if (value.trim()) {
+          newParams.set("search", value.trim());
+        } else {
+          newParams.delete("search");
+        }
+        setSearchParams(newParams);
+      }, 300);
+    },
+    [searchParams, setSearchParams],
+  );
   const handleProductStatusRemove = useCallback(
     () => setProductStatus(undefined),
     [],
@@ -430,6 +502,11 @@ export default function ProductsIndex() {
     handleTaggedWithRemove();
     handleQueryValueRemove();
     setSearchProduct([]);
+    setProductStatus(undefined);
+    setTaggedWith("");
+    setQueryValue("");
+    const newParams = new URLSearchParams();
+    setSearchParams(newParams);
   }, [
     handleProductStatusRemove,
     handleInventoryRangeRemove,
@@ -437,29 +514,20 @@ export default function ProductsIndex() {
     handleTaggedWithRemove,
   ]);
 
-  const [searchParams] = useSearchParams();
+  // PAGINATOIN USING SERVER
 
   const handlePagination = (direction: "next" | "prev") => {
     const cursor =
       direction === "next" ? pageInfo.endCursor : pageInfo.startCursor;
     const param = direction === "next" ? "after" : "before";
+
+    let flag = direction === "next" ? pageNumber + 1 : pageNumber - 1;
+    setPageNumber(flag);
+
     const newParams = new URLSearchParams(searchParams);
     newParams.set(param, cursor ?? "");
     newParams.delete(direction === "next" ? "before" : "after");
-    setIsLoading(true);
-    fetchProductsFromApi(newParams.toString())
-      .then((apiData) => {
-        console.log(apiData);
-        setProducts(apiData.products);
-        setPageInfo(apiData.pageInfo);
-      })
-      .catch((error) => {
-        console.error("API pagination error:", error);
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
-    window.history.replaceState({}, "", `?${newParams.toString()}`);
+    setSearchParams(newParams);
   };
 
   const filters = [
@@ -473,7 +541,6 @@ export default function ProductsIndex() {
           choices={[
             { label: "Active", value: "ACTIVE" },
             { label: "Draft", value: "DRAFT" },
-            { label: "Archived", value: "ARCHIVED" },
           ]}
           selected={productStatus || []}
           onChange={handleProductStatusChange}
@@ -524,49 +591,29 @@ export default function ProductsIndex() {
     });
   }
 
-  // First, filter products based on status, tags, and search query
-  const filteredProducts = [...products, ...searchProduct].filter(
-    (product: any) => {
-      // Filter by product status
-      if (productStatus?.length && !productStatus.includes(product.status)) {
-        return false;
-      }
-      // Filter by tags
-      if (taggedWith) {
-        const tagsArray = Array.isArray(product.tags)
-          ? product.tags
-          : [product.tags];
-        if (!tagsArray.some((tag: any) => tag.includes(taggedWith))) {
+  const { filteredProducts } = useMemo(() => {
+    const filteredProducts = [...products, ...searchProduct].filter(
+      (product: any) => {
+        if (productStatus?.length && !productStatus.includes(product.status)) {
           return false;
         }
-      }
+        if (taggedWith) {
+          const tagsArray = Array.isArray(product.tags)
+            ? product.tags
+            : [product.tags];
+          if (!tagsArray.some((tag: any) => tag.includes(taggedWith))) {
+            return false;
+          }
+        }
+        if (queryValue) {
+          return product.title.toLowerCase().includes(queryValue.toLowerCase());
+        }
+        return true;
+      },
+    );
+    return { filteredProducts };
+  }, [products, searchProduct, productStatus, taggedWith, queryValue]);
 
-      // Filter by search query (if present)
-      if (queryValue) {
-        return product.title.toLowerCase().includes(queryValue.toLowerCase());
-      }
-
-      return true;
-    },
-  );
-
-  // Then sort the filtered products
-  const sortedProducts = [...filteredProducts].sort((a, b) => {
-    const sortValue = sortSelected[0];
-
-    switch (sortValue) {
-      case "title asc":
-        return a.title.localeCompare(b.title);
-      case "title desc":
-        return b.title.localeCompare(a.title);
-      case "tags asc":
-        return (a.tags?.length || 0) - (b.tags?.length || 0);
-      case "tags desc":
-        return (b.tags?.length || 0) - (a.tags?.length || 0);
-      default:
-        return 0;
-    }
-  });
   const resourceName = {
     singular: "product",
     plural: "products",
@@ -588,8 +635,6 @@ export default function ProductsIndex() {
 
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [isPopupOpen, setIsPopupOpen] = useState(false);
-
-  // Add this function to handle opening the popup
   const handleProductClick = useCallback((product: any) => {
     setSelectedProduct(product);
     setIsPopupOpen(true);
@@ -605,85 +650,79 @@ export default function ProductsIndex() {
   };
 
   return (
-    <Page title="Product Tags" fullWidth>
-      <div style={{ width: "90%", margin: "0 auto" }}>
-        <LegacyCard>
-          <IndexFilters
-            sortOptions={sortOptions}
-            sortSelected={sortSelected}
-            queryValue={queryValue}
-            queryPlaceholder="Search products"
-            onQueryChange={handleFiltersQueryChange}
-            onQueryClear={() => {
-              setQueryValue("");
-              setSearchProduct([]);
-            }}
-            onSort={setSortSelected}
-            primaryAction={primaryAction}
-            cancelAction={{
-              onAction: onHandleCancel,
-              disabled: false,
-              loading: isLoading,
-            }}
-            tabs={tabs}
-            selected={selected}
-            onSelect={setSelected}
-            canCreateNewView
-            onCreateNewView={onCreateNewView}
-            filters={filters}
-            appliedFilters={appliedFilters}
-            onClearAll={handleFiltersClearAll}
-            mode={mode}
-            setMode={setMode}
-          />
-          <div style={{ height: "400px", overflowY: "auto" }}>
-            <IndexTable
-              resourceName={resourceName}
-              itemCount={filteredProducts.length}
-              selectedItemsCount={
-                allResourcesSelected ? "All" : selectedResources.length
-              }
-              onSelectionChange={handleSelectionChange}
-              headings={[
-                { title: "Image" },
-                { title: "Product" },
-                { title: "Status" },
-                { title: "Tags" },
-                { title: "Tags Titles" },
-              ]}
-            >
-              <RowMarkup
-                filteredProducts={sortedProducts}
-                selectedResources={selectedResources}
-                onProductClick={handleProductClick}
-              />
-            </IndexTable>
-          </div>
-        </LegacyCard>
+    <Page title="Product Tags" fullWidth >
+    <div style={{display:"grid",gap:"10px"}}>
+      <Card>
+        <GenarateTagForAll
+          onTagsUpdated={handleTagsUpdated}
+          avalableProducts={products}
+          selectedResources={selectedResources}
+          useTags={{ tags, setTags }}
+        />
+      </Card>
 
-        <Card>
-          <div className="app-tags--pagination-bottom">
-            <Pagination
-              nextTooltip="next"
-              previousTooltip="prev"
-              label={
-                <span style={{ fontSize: "14px", color: "#333" }}>
-                  Page Nagigation 📃
-                </span>
-              }
-              hasPrevious={!!pageInfo.hasPreviousPage}
-              hasNext={!!pageInfo.hasNextPage}
-              onPrevious={() => handlePagination("prev")}
-              onNext={() => handlePagination("next")}
-            />
-            {/* All Genarate Gatags For Compoment */}
-            <GenarateTagForAll
-              onTagsUpdated={handleTagsUpdated}
-              avalableProducts={products}
-              selectedResources={selectedResources}
-            />
-          </div>
-        </Card>
+      <LegacyCard>
+        <IndexFilters
+          sortOptions={sortOptions}
+          sortSelected={sortSelected}
+          queryValue={queryValue}
+          queryPlaceholder="Search products"
+          onQueryChange={handleFiltersQueryChange}
+          onQueryClear={() => {
+            setQueryValue("");
+            handleFiltersQueryChange("");
+            setSearchProduct([]);
+          }}
+          onSort={handleSortChange}
+          primaryAction={primaryAction}
+          cancelAction={{
+            onAction: onHandleCancel,
+            disabled: false,
+            loading: isLoading || isNavigation,
+          }}
+          tabs={tabs}
+          selected={selected}
+          onSelect={setSelected}
+          canCreateNewView
+          onCreateNewView={onCreateNewView}
+          filters={filters}
+          appliedFilters={appliedFilters}
+          onClearAll={handleFiltersClearAll}
+          mode={mode}
+          setMode={setMode}
+        />
+        {/* <div style={{ height: "400px", overflowY: "auto" }}> */}
+        <IndexTable
+          resourceName={resourceName}
+          itemCount={filteredProducts.length}
+          selectedItemsCount={
+            allResourcesSelected ? "All" : selectedResources.length
+          }
+          onSelectionChange={handleSelectionChange}
+          headings={[
+            { title: "Image" },
+            { title: "Product" },
+            { title: "Status" },
+            { title: "Tags" },
+            { title: "Tags Titles" },
+          ]}
+          pagination={{
+            hasNext: !!pageInfo.hasNextPage,
+            hasPrevious: !!pageInfo.hasPreviousPage,
+            onNext: () => handlePagination("next"),
+            onPrevious: () => handlePagination("prev"),
+            label: `Page ${pageNumber}`,
+          }}
+        >
+          <RowMarkup
+            filteredProducts={filteredProducts}
+            selectedResources={selectedResources}
+            onProductClick={handleProductClick}
+            onTags={{ generateTags: tags, setGenerateTags: setTags }}
+          />
+        </IndexTable>
+        {/* </div> */}
+      </LegacyCard>
       </div>
       <ProductDetailPopup
         product={selectedProduct}
