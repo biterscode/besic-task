@@ -649,6 +649,11 @@ export default function ProductsIndex() {
     );
   };
 
+
+  useEffect(()=>{
+console.log(selectedResources)
+  },[selectedResources]);
+
   return (
     <Page title="Product Tags" fullWidth >
     <div style={{display:"grid",gap:"10px"}}>

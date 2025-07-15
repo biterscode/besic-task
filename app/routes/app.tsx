@@ -23,6 +23,7 @@ export default function App() {
         </Link>
         <Link to="/app/tags">Tags Page</Link>
         <Link to="/app/testPage">Test Page</Link>
+        <Link to="/create-product-feed">Create Product Feed</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>

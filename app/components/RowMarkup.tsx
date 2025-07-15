@@ -35,7 +35,6 @@ export default function ({
   const mergedTagsMap = useMemo(() => {
     if (!generateTags) return new Map<string, string[]>();
     const map = new Map<string, string[]>();
-    console.log(generateTags);
     generateTags.forEach((product: Product) => {
       map.set(product.id, [...new Set(product.tags)]);
     });
@@ -81,25 +80,27 @@ export default function ({
       <IndexTable.Cell>
         {showMoreId != id
           ? displayTags
-              .slice(0, 15)
+              .slice(0, 5)
               .map((tag: string) => <Tag key={tag}>{tag}</Tag>)
           : displayTags.map((tag: string) => <Tag key={tag}>{tag}</Tag>)}
 
         {updatedTags?.map((tag: string) => (
-          <Tag
+            <Tag
+            
             key={tag + "-updated"}
             onRemove={() => removeTagsHandle({ pid: id, tagTitle: tag })}
-          >
-            {tag}
-          </Tag>
+            
+            >
+            <div style={{ color: "#04273fff" ,display: "inline" }}>{tag}</div>
+            </Tag>
         ))}
-        {showMoreId != id && displayTags.length > 15 && (
+        {showMoreId != id && displayTags.length > 5 && (
           <div
             onClick={() => setShowMoreId(id)}
             style={{ display: "inline", cursor: "cell" }}
           >
             <Badge tone="info">
-              {(displayTags.length - 8).toString()} more
+              {(displayTags.length - 5).toString()} more
             </Badge>
           </div>
         )}

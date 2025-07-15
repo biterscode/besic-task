@@ -24,6 +24,7 @@ export default function GenerateTagForAll({
   avalableProducts: Product[];
   onTagsUpdated: (updatedProducts: Product[]) => void;
   useTags: any;
+  
 }) {
   const navigation = useNavigation();
   const [manualTags, setManualTags] = useState<string[]>([]);
